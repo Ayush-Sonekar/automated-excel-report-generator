@@ -11,9 +11,11 @@ from config import Config
 class DataProcessor:
     """Handles all data processing operations including cleaning and aggregation."""
     
-    def __init__(self, verbose=False):
+    def __init__(self, verbose=False, impute=False):
         self.verbose = verbose
         self.config = Config()
+        # Imputing (median/mode) invents data, so it is off by default.
+        self.impute = impute
     
     def load_data(self, file_path):
         """
@@ -86,14 +88,14 @@ class DataProcessor:
             if col in cleaned_df.columns and cleaned_df[col].dtype == 'object':
                 # Convert price strings to numeric, handling commas and invalid values
                 cleaned_df[col] = pd.to_numeric(
-                    cleaned_df[col].astype(str).str.replace(',', '').str.replace(' ', '').str.replace('-', '').replace('', '0'),
+                    cleaned_df[col].astype(str).str.replace(',', '').str.replace(' ', '').str.replace('-', ''),
                     errors='coerce'
                 )
                 if self.verbose:
                     print(f"Converted {col} to numeric (price column)")
         
         # For numeric columns, handle missing values intelligently
-        numeric_columns = cleaned_df.select_dtypes(include=[np.number]).columns
+        numeric_columns = cleaned_df.select_dtypes(include=[np.number]).columns if self.impute else []
         for col in numeric_columns:
             if cleaned_df[col].isnull().sum() > 0:
                 # For price columns, don't fill with median - keep as NaN for proper exclusion
@@ -113,16 +115,12 @@ class DataProcessor:
                         print(f"Filled {col} missing values with median: {median_val:.2f}")
         
         # For categorical columns, fill with mode or 'Unknown'
-        categorical_columns = cleaned_df.select_dtypes(include=['object']).columns
+        categorical_columns = cleaned_df.select_dtypes(include=['object', 'string']).columns
         for col in categorical_columns:
             if cleaned_df[col].isnull().sum() > 0:
-                if not cleaned_df[col].mode().empty:
-                    mode_val = cleaned_df[col].mode()[0]
-                    cleaned_df[col] = cleaned_df[col].fillna(mode_val)
-                else:
-                    cleaned_df[col].fillna('Unknown', inplace=True)
+                cleaned_df[col] = cleaned_df[col].fillna('Unknown')
                 if self.verbose:
-                    print(f"Filled {col} missing values")
+                    print(f"Filled {col} missing values with 'Unknown'")
         
         # Remove duplicates
         duplicates_before = len(cleaned_df)
@@ -150,20 +148,23 @@ class DataProcessor:
         # Common column name mappings
         column_mappings = {
             'date': ['date', 'order_date', 'transaction_date', 'sale_date'],
-            'sales': ['sales', 'amount', 'revenue', 'total', 'value','sale_price'],
+            'sales': ['sales', 'amount', 'revenue'],
             'product': ['product', 'item', 'product_name', 'item_name','building_class_at_present'],
             'region': ['region', 'location', 'area', 'territory','zip_code'],
-            'month': ['month', 'month_name','sale_date'],
             'quantity': ['quantity', 'qty', 'units', 'count','total_units']
         }
         
         # Normalize column names (lowercase, remove spaces)
         standardized_df.columns = [col.lower().strip().replace(' ', '_') for col in standardized_df.columns]
+
+        # Drop leftover index columns (e.g. 'Unnamed: 0'); they make every row unique
+        # and stop duplicate detection from working.
+        standardized_df = standardized_df.loc[:, ~standardized_df.columns.str.startswith('unnamed')]
         
         # Try to identify and standardize key columns
         for standard_name, possible_names in column_mappings.items():
             for col in standardized_df.columns:
-                if any(possible in col.lower() for possible in possible_names):
+                if col.lower() in possible_names:
                     if standard_name not in standardized_df.columns:
                         standardized_df = standardized_df.rename(columns={col: standard_name})
                         if self.verbose:
@@ -199,6 +200,7 @@ class DataProcessor:
                     date_df['month'] = date_df[col].dt.month
                     date_df['month_name'] = date_df[col].dt.month_name()
                     date_df['quarter'] = date_df[col].dt.quarter
+                    date_df['year_month'] = date_df[col].dt.to_period('M').astype(str)
                     
             except Exception as e:
                 if self.verbose:
@@ -266,8 +268,9 @@ class DataProcessor:
                 print(f"Using {len(valid_sales_df):,} valid sales records (out of {len(df):,} total) for accurate aggregations")
             
             # Monthly aggregation with valid sales only
-            if 'month_name' in valid_sales_df.columns and len(valid_sales_df) > 0:
-                monthly_agg = valid_sales_df.groupby('month_name')[sales_col].agg(['sum', 'count', 'mean']).reset_index()
+            if 'year_month' in valid_sales_df.columns and len(valid_sales_df) > 0:
+                dated = valid_sales_df[valid_sales_df['year_month'] != 'NaT']
+                monthly_agg = dated.groupby('year_month')[sales_col].agg(['sum', 'count', 'mean']).reset_index().sort_values('year_month')
                 monthly_agg.columns = ['Month', 'Total_Sales', 'Transaction_Count', 'Average_Sale']
                 monthly_agg = monthly_agg.round(2)
                 aggregations['monthly'] = monthly_agg
@@ -289,13 +292,16 @@ class DataProcessor:
             # Regional aggregation with valid sales only
             region_col = None
             for col in valid_sales_df.columns:
-                if any(keyword in col.lower() for keyword in ['region', 'location', 'area']):
+                if any(keyword in col.lower() for keyword in ['region', 'location', 'area', 'borough', 'neighborhood']):
                     region_col = col
                     break
             
             if region_col and len(valid_sales_df) > 0:
                 region_agg = valid_sales_df.groupby(region_col)[sales_col].agg(['sum', 'count', 'mean']).reset_index()
                 region_agg.columns = ['Region', 'Total_Sales', 'Transaction_Count', 'Average_Sale']
+                if region_col == 'borough':
+                    names = {1: 'Manhattan', 2: 'Bronx', 3: 'Brooklyn', 4: 'Queens', 5: 'Staten Island'}
+                    region_agg['Region'] = region_agg['Region'].map(names).fillna(region_agg['Region'].astype(str))
                 region_agg = region_agg.sort_values('Total_Sales', ascending=False)
                 region_agg = region_agg.round(2)
                 aggregations['regional'] = region_agg
@@ -345,6 +351,16 @@ class DataProcessor:
         # Step 2: Parse dates
         date_parsed_data = self.parse_dates(standardized_data)
         
+        # Measure data quality on the source data, before any cleaning
+        null_markers = [' - ', ' -  ', '-', '  ', '', 'N/A']
+        probe = date_parsed_data.replace(null_markers, pd.NA)
+        quality = {
+            'rows_in': len(date_parsed_data),
+            'missing_percent_raw': round(float(probe.isna().sum().sum() / probe.size * 100), 2),
+            'duplicate_rows': int(date_parsed_data.duplicated().sum()),
+            'worst_columns': {c: round(float(v) * 100, 1) for c, v in probe.isna().mean().sort_values(ascending=False).head(3).items() if v > 0.05},
+        }
+
         # Step 3: Clean data
         cleaned_data = self.clean_data(date_parsed_data)
         
@@ -355,6 +371,7 @@ class DataProcessor:
         processed_data = {
             'raw_data': cleaned_data,
             'aggregations': aggregations,
+            'quality': quality,
             'processing_timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         }
         
