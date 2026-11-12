@@ -56,7 +56,7 @@ class DataIntelligence:
             'all_scores': scores
         }
     
-    def generate_insights(self, df, aggregations, domain_info):
+    def generate_insights(self, df, aggregations, domain_info, quality=None):
         """
         Generate intelligent business insights based on data analysis.
         
@@ -80,7 +80,7 @@ class DataIntelligence:
             insights.extend(self._generate_financial_insights(df, aggregations))
         
         # General statistical insights
-        insights.extend(self._generate_statistical_insights(df))
+        insights.extend(self._generate_statistical_insights(df, quality))
         
         return insights
     
@@ -146,7 +146,7 @@ class DataIntelligence:
             if not regions.empty:
                 top_region = regions.iloc[0, 0]
                 if str(top_region) != 'Unknown' and str(top_region) != 'nan':
-                    insights.append(f"Most active market area: {top_region}")
+                    insights.append(f"Highest total sales area: {top_region}")
         
         # Building type analysis
         building_cols = [col for col in df.columns if 'building' in col.lower() and 'class' in col.lower()]
@@ -195,27 +195,35 @@ class DataIntelligence:
         """Generate financial-specific insights."""
         insights = []
         
-        # Add financial-specific logic here
-        insights.append("Financial data analysis completed")
+        # Not implemented: financial datasets receive the general statistical insights only.
         
         return insights
     
-    def _generate_statistical_insights(self, df):
+    def _generate_statistical_insights(self, df, quality=None):
         """Generate general statistical insights."""
         insights = []
         
         # Data quality insights
         total_records = len(df)
-        missing_data = df.isnull().sum().sum()
-        missing_percent = (missing_data / (total_records * len(df.columns))) * 100
-        
+        if quality and 'missing_percent_raw' in quality:
+            missing_percent = quality['missing_percent_raw']   # measured before cleaning
+        else:
+            missing_data = df.isnull().sum().sum()
+            missing_percent = (missing_data / (total_records * len(df.columns))) * 100
+
         if missing_percent < 5:
-            insights.append("Excellent data quality - minimal missing values")
-        elif missing_percent > 20:
-            insights.append("Data quality concern - significant missing values detected")
+            insights.append(f"Low share of missing values in the source file ({missing_percent:.1f}%)")
+        else:
+            insights.append(f"{missing_percent:.1f}% of values in the source file were missing or placeholders")
+        if quality and quality.get('worst_columns'):
+            worst = ', '.join(f"{c} ({p}%)" for c, p in quality['worst_columns'].items())
+            insights.append(f"Most incomplete columns in the source file: {worst}")
+        if quality and quality.get('duplicate_rows'):
+            insights.append(f"{quality['duplicate_rows']:,} duplicate rows were removed")
         
         # Numeric column analysis
-        numeric_cols = df.select_dtypes(include=[np.number]).columns
+        numeric_cols = [c for c in df.select_dtypes(include=[np.number]).columns
+                        if not any(k in c.lower() for k in ('id', 'index', 'unnamed', 'block', 'lot', 'zip', 'year'))]
         for col in numeric_cols[:3]:  # Analyze first 3 numeric columns
             if col in df.columns:
                 values = df[col].dropna()
