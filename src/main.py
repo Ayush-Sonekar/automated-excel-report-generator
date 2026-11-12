@@ -16,8 +16,7 @@ from config import Config
 def main():
     """Main function to orchestrate the report generation process."""
     parser = argparse.ArgumentParser(description='Generate professional Excel reports from CSV data')
-    parser.add_argument('input_file', nargs='?', default='nyc-rolling-sales.csv', 
-                       help='Path to input CSV file (default: sample_data.csv)')
+    parser.add_argument('input_file', help='Path to the input CSV file')
     parser.add_argument('--output', '-o', default=None, 
                        help='Output Excel file path (default: auto-generated with timestamp)')
     parser.add_argument('--verbose', '-v', action='store_true', 
@@ -28,7 +27,7 @@ def main():
     # Validate input file exists
     if not os.path.exists(args.input_file):
         print(f"Error: Input file '{args.input_file}' not found.")
-        print("Please provide a valid CSV file path or use the default 'sample_data.csv'")
+        print("Please provide a valid path to a CSV file.")
         return 1
     
     # Generate output filename with timestamp if not provided
@@ -67,7 +66,7 @@ def main():
         processed_data = processor.process_data(raw_data)
         
         # Generate intelligent insights
-        insights = intelligence.generate_insights(processed_data['raw_data'], processed_data['aggregations'], domain_info)
+        insights = intelligence.generate_insights(processed_data['raw_data'], processed_data['aggregations'], domain_info, processed_data.get('quality'))
         processed_data['domain_info'] = domain_info
         processed_data['insights'] = insights
         
