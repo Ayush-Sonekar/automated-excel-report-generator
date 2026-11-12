@@ -51,7 +51,7 @@ class ReportGenerator:
         
         # Create sheets
         wb.create_sheet("Executive Summary", 0)
-        wb.create_sheet("Raw Data", 1)
+        wb.create_sheet("Cleaned Data", 1)
         wb.create_sheet("Monthly Analysis", 2)
         wb.create_sheet("Product Analysis", 3)
         wb.create_sheet("Regional Analysis", 4)
@@ -139,7 +139,8 @@ class ReportGenerator:
             ws.cell(row=current_row, column=1).value = "No data available"
             return current_row + 1
         
-        # Write dataframe
+        # Write dataframe (NaN/NA -> empty cell so Excel opens the file cleanly)
+        df = df.astype(object).where(df.notna(), None)
         for r_idx, row in enumerate(dataframe_to_rows(df, index=False, header=True)):
             for c_idx, value in enumerate(row, 1):
                 cell = ws.cell(row=current_row + r_idx, column=c_idx)
@@ -150,7 +151,7 @@ class ReportGenerator:
             self.format_header_row(ws, current_row, 1, len(df.columns))
             
             # Format data rows
-            if len(df) > 0:
+            if 0 < len(df) <= 5000:  # per-cell styling is very slow on large sheets
                 data_start_row = current_row + 1
                 data_end_row = current_row + len(df)
                 self.format_data_range(ws, data_start_row, 1, data_end_row, len(df.columns))
@@ -159,7 +160,7 @@ class ReportGenerator:
         for col in ws.columns:
             max_length = 0
             column = col[0].column_letter
-            for cell in col:
+            for cell in col[:1000]:
                 try:
                     if len(str(cell.value)) > max_length:
                         max_length = len(str(cell.value))
@@ -237,7 +238,7 @@ class ReportGenerator:
         
         # Format insights with bullet points
         formatted_insights = []
-        for insight in insights[:8]:  # Limit to 8 insights for space
+        for insight in insights[:10]:  # Limit to 10 insights for space
             if not insight.startswith('•'):
                 insight = f"• {insight}"
             formatted_insights.append(insight)
@@ -273,9 +274,10 @@ class ReportGenerator:
                     
                     # Insert image into worksheet (don't delete temp file yet)
                     img = Image(temp_file)
+                    img.width, img.height = img.width * 0.5, img.height * 0.5
                     
                     ws.add_image(img, f'A{row_position}')
-                    row_position += 25  # Leave space for next chart
+                    row_position += 35  # Leave space for next chart
                     
                 except Exception as e:
                     if self.verbose:
@@ -316,8 +318,8 @@ class ReportGenerator:
             # Raw Data Sheet
             if self.verbose:
                 print("Writing raw data...")
-            raw_ws = wb["Raw Data"]
-            self.write_dataframe_to_sheet(raw_ws, processed_data['raw_data'], title="Raw Business Data")
+            raw_ws = wb["Cleaned Data"]
+            self.write_dataframe_to_sheet(raw_ws, processed_data['raw_data'], title="Cleaned Business Data")
             
             # Monthly Analysis Sheet
             if 'monthly' in processed_data['aggregations']:
